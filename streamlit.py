@@ -1,64 +1,96 @@
 import streamlit as st
 import pandas as pd
+import altair as alt
 
-st.title('🛫 Simulador Interactivo de Horas de Vuelo')
+# --------------------------- Configuración inicial ---------------------------
+st.set_page_config(page_title="Planificador de Horas de Vuelo", layout="wide")
 
-# Definición de restricciones
-MESES_ALTO_USO = ['Enero', 'Julio', 'Agosto', 'Diciembre']
-HORAS_MAX_MES = 90
-HORAS_MIN_MES = 52
-HORAS_MAX_ANUAL = 1000
+st.title("🛫 Planificador de Horas de Vuelo")
 
-meses = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+# --------------------------- Widgets de configuración ---------------------------
+with st.expander("🔧 Configuración de restricciones", expanded=True):
+    HORAS_MAX_MES = st.number_input("Máximo de horas por mes", min_value=1, max_value=200, value=90)
+    HORAS_MIN_MES = st.number_input("Mínimo de horas por mes", min_value=1, max_value=200, value=52)
+    HORAS_MAX_ANUAL = st.number_input("Máximo de horas anuales", min_value=1, max_value=2000, value=1000)
+
+# --------------------------- Datos base ---------------------------
+MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
          'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
+MESES_ALTA_DEMANDA = ['Enero', 'Julio', 'Agosto', 'Diciembre']
 
-# Inicializar DataFrame
-datos = pd.DataFrame({
-    'Mes': meses,
-    'Mínimo': [HORAS_MIN_MES]*12,
-    'Máximo': [HORAS_MAX_MES]*12,
-    'Asignadas': [HORAS_MAX_MES if mes in MESES_ALTO_USO else HORAS_MIN_MES for mes in meses]
+df = pd.DataFrame({
+    'Mes': MESES,
+    'Horas asignadas ✏️': [HORAS_MAX_MES if mes in MESES_ALTA_DEMANDA else HORAS_MIN_MES for mes in MESES],
+    'Mes alta demanda': [mes in MESES_ALTA_DEMANDA for mes in MESES],
 })
 
-st.subheader("🔧 Ajuste manual de horas por mes")
-total_asignado = 0
+# --------------------------- Edición interactiva ---------------------------
+st.subheader("✏️ Horas asignadas por mes")
 
-# Crear sliders interactivos por mes
-for idx, mes in enumerate(datos['Mes']):
-    asignado = st.slider(
-        f"Horas asignadas - {mes}",
-        min_value=int(datos.loc[idx, 'Mínimo']),
-        max_value=int(datos.loc[idx, 'Máximo']),
-        value=int(datos.loc[idx, 'Asignadas'])
-    )
-    datos.at[idx, 'Asignadas'] = asignado
+editable_cols = ['Horas asignadas ✏️', 'Mes alta demanda']
 
-# Calcular promedio semanal
-datos['Promedio semanal'] = datos['Asignadas'] / 4
+edited = st.data_editor(
+    df,
+    use_container_width=True,
+    num_rows="fixed",
+    disabled=[col for col in df.columns if col not in editable_cols],
+    column_config={
+        "Horas asignadas ✏️": st.column_config.NumberColumn(
+            "Horas asignadas ✏️",
+            min_value=HORAS_MIN_MES,
+            max_value=HORAS_MAX_MES,
+            step=1,
+            format="%d"
+        ),
+        "Mes alta demanda": st.column_config.CheckboxColumn("Mes alta demanda"),
+    }
+)
 
-# Verificar restricciones anuales
-total_asignado = datos['Asignadas'].sum()
+# 🔄 Calcular automáticamente el promedio semanal
+edited['Promedio semanal'] = edited['Horas asignadas ✏️'] / 4
 
-st.markdown("---")
-st.subheader("📈 Resumen de horas asignadas")
-st.dataframe(datos.set_index('Mes'))
+# --------------------------- Validaciones ---------------------------
+warnings = []
 
-# Gráfica visual de horas asignadas
-st.bar_chart(datos.set_index('Mes')['Asignadas'])
+if any((edited['Horas asignadas ✏️'] < HORAS_MIN_MES) | (edited['Horas asignadas ✏️'] > HORAS_MAX_MES)):
+    warnings.append(f"❌ Las horas asignadas deben estar entre {HORAS_MIN_MES} y {HORAS_MAX_MES} por mes.")
 
-# Validaciones
-if total_asignado > HORAS_MAX_ANUAL:
-    st.error(f"❌ Se excedieron las horas anuales ({total_asignado} hrs). Máximo permitido: {HORAS_MAX_ANUAL} hrs.")
-elif total_asignado < HORAS_MAX_ANUAL:
-    restante = HORAS_MAX_ANUAL - total_asignado
-    st.warning(f"⚠️ Quedan {restante} horas disponibles del límite anual ({HORAS_MAX_ANUAL} hrs).")
+total_anual = edited['Horas asignadas ✏️'].sum()
+if total_anual > HORAS_MAX_ANUAL:
+    warnings.append(f"❌ Se excedieron las horas anuales permitidas: {total_anual} hrs (Máximo: {HORAS_MAX_ANUAL})")
+elif total_anual < HORAS_MAX_ANUAL:
+    restante = HORAS_MAX_ANUAL - total_anual
+    warnings.append(f"⚠️ Has asignado {total_anual} horas, te quedan {restante} horas por asignar del total anual permitido ({HORAS_MAX_ANUAL} hrs).")
 else:
-    st.success("✅ ¡Has asignado exactamente el límite anual de 1000 horas!")
+    warnings.append("✅ ¡Has asignado exactamente el total de horas permitidas!")
 
-# Control estricto promedio semanal
-if any(datos['Promedio semanal'] > 30):
-    meses_conflicto = datos.loc[datos['Promedio semanal'] > 30, 'Mes'].tolist()
-    st.warning(f"⚠️ Meses que superan el promedio semanal recomendado (30 hrs/sem): {', '.join(meses_conflicto)}. Revisa la asignación.")
+semanales_conflicto = edited.loc[edited['Promedio semanal'] > 30, 'Mes'].tolist()
+if semanales_conflicto:
+    warnings.append(f"⚠️ Los siguientes meses superan 30 hrs semanales: {', '.join(semanales_conflicto)}")
 
-# Nota adicional sobre restricción semanal (informativa)
-st.info("💡 Recuerda que semanalmente no debes superar las 30 horas por piloto. Considera esta restricción al planificar vuelos específicos.")
+# --------------------------- Mostrar advertencias ---------------------------
+for warn in warnings:
+    st.warning(warn)
+
+# --------------------------- Tabla resumen ---------------------------
+st.subheader("📊 Resumen de horas asignadas")
+edited['Total anual'] = total_anual
+st.dataframe(edited.drop(columns='Total anual'), use_container_width=True, hide_index=True)
+
+# --------------------------- Gráfica de barras ---------------------------
+color_scale = alt.condition(
+    alt.datum["Mes alta demanda"],
+    alt.value("#FF7F50"),
+    alt.value("#1f77b4")
+)
+
+chart = alt.Chart(edited).mark_bar().encode(
+    x=alt.X("Mes", sort=MESES),
+    y="Horas asignadas ✏️",
+    color=color_scale
+).properties(
+    width=700,
+    height=400
+)
+
+st.altair_chart(chart, use_container_width=True)
